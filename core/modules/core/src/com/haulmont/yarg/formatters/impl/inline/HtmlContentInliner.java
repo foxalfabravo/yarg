@@ -23,18 +23,14 @@ import com.sun.star.text.XText;
 import com.sun.star.text.XTextCursor;
 import com.sun.star.text.XTextRange;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.poi.hssf.usermodel.HSSFCell;
 import org.apache.poi.hssf.usermodel.HSSFPatriarch;
-import org.docx4j.jaxb.Context;
-import org.docx4j.openpackaging.contenttype.ContentType;
 import org.docx4j.openpackaging.packages.SpreadsheetMLPackage;
 import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
-import org.docx4j.openpackaging.parts.PartName;
 import org.docx4j.openpackaging.parts.SpreadsheetML.WorksheetPart;
-import org.docx4j.openpackaging.parts.WordprocessingML.AlternativeFormatInputPart;
-import org.docx4j.relationships.Relationship;
-import org.docx4j.wml.CTAltChunk;
+import org.docx4j.openpackaging.parts.WordprocessingML.AltChunkType;
+import org.docx4j.openpackaging.parts.WordprocessingML.MainDocumentPart;
 import org.docx4j.wml.R;
 import org.docx4j.wml.Text;
 import org.xlsx4j.sml.Cell;
@@ -90,16 +86,11 @@ public class HtmlContentInliner implements ContentInliner {
 
     public void inlineToDocx(WordprocessingMLPackage wordPackage, Text text, Object paramValue, Matcher matcher) {
         try {
-            AlternativeFormatInputPart afiPart = new AlternativeFormatInputPart(new PartName("/" + UUID.randomUUID().toString() + ".html"));
-            afiPart.setBinaryData(paramValue.toString().getBytes());
-            afiPart.setContentType(new ContentType("text/html"));
-            Relationship altChunkRel = wordPackage.getMainDocumentPart().addTargetPart(afiPart);
-            CTAltChunk ac = Context.getWmlObjectFactory().createCTAltChunk();
-            ac.setId(altChunkRel.getId());
             R run = (R) text.getParent();
-            run.getContent().add(ac);
+            wordPackage.getContentTypeManager().addDefaultContentType("xhtml", "text/xhtml");
+            MainDocumentPart mainDocumentPart = wordPackage.getMainDocumentPart();
+            mainDocumentPart.addAltChunk(AltChunkType.Xhtml, paramValue.toString().getBytes(), run);
             text.setValue("");
-            wordPackage.getContentTypeManager().addDefaultContentType("html", "text/html");
         } catch (Exception e) {
             throw new ReportFormattingException("An error occurred while inserting html to docx file", e);
         }
@@ -107,12 +98,12 @@ public class HtmlContentInliner implements ContentInliner {
 
     @Override
     public void inlineToXls(HSSFPatriarch patriarch, HSSFCell resultCell, Object paramValue, Matcher matcher) {
-        throw new UnsupportedOperationException();
+        throw new UnsupportedOperationException("Inline html content to XSL is not supported");
     }
 
     @Override
     public void inlineToXlsx(SpreadsheetMLPackage pkg, WorksheetPart worksheetPart, Cell newCell, Object paramValue, Matcher matcher) {
-        throw new UnsupportedOperationException();
+        throw new UnsupportedOperationException("Inline html content to XSLX is not supported");
     }
 
     private void insertHTML(XText destination, XTextRange textRange, String htmlContent)

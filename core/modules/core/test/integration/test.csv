@@ -1,0 +1,2 @@
+First name;Last name;Date;BigDecimal
+${firstName};${lastName};${date};${bigdc}

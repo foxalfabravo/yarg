@@ -27,7 +27,7 @@ import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.ReportFieldFormat;
 import com.haulmont.yarg.structure.ReportOutputType;
 import com.haulmont.yarg.structure.ReportTemplate;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
@@ -38,10 +38,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public abstract class AbstractFormatter implements ReportFormatter {
+    public static final String SIMPLE_ALIAS_REGEXP = "\\$\\{([A-z0-9_]+?)\\}";
+
+    public static final String ALIAS_GROUP = "([A-z0-9_\\.]+?)";
     public static final String STRING_FUNCTION_GROUP = "(\\[\\d+\\])";
-    public static final String ALIAS_GROUP = "([A-z0-9_\\.#]+?)";
     public static final String UNIVERSAL_ALIAS_REGEXP = "\\$\\{" + ALIAS_GROUP + " *" + STRING_FUNCTION_GROUP + "?\\}";
-    public static final String ALIAS_WITH_BAND_NAME_REGEXP = "\\$\\{([A-z0-9_\\.]+?#?[A-z0-9_\\.]+?) *(\\[\\d+\\])?\\}";
+    public static final String ALIAS_WITH_BAND_NAME_REGEXP = UNIVERSAL_ALIAS_REGEXP;
     public static final String BAND_NAME_DECLARATION_REGEXP = "##band=([A-z_0-9]+) *";
 
     public static final Pattern UNIVERSAL_ALIAS_PATTERN = Pattern.compile(UNIVERSAL_ALIAS_REGEXP, Pattern.CASE_INSENSITIVE);
@@ -120,7 +122,7 @@ public abstract class AbstractFormatter implements ReportFormatter {
             } else if (value instanceof Date) {
                 SimpleDateFormat dateFormat = new SimpleDateFormat(formatString);
                 valueString = dateFormat.format(value);
-            } else if (value instanceof String) {
+            } else if (value instanceof String && !formatString.startsWith("${")) {//do not use inliner alias as format string
                 valueString = String.format(formatString, value);
             } else {
                 valueString = value.toString();
@@ -190,7 +192,7 @@ public abstract class AbstractFormatter implements ReportFormatter {
     }
 
     protected boolean containsJustOneAlias(String value) {
-        return !StringUtils.isBlank(value) && value.startsWith("${") && value.endsWith("}");
+        return !StringUtils.isBlank(value) && value.matches("\\$\\{[^\\$\\{\\}]*\\}");
     }
 
     protected BandData findBandByPath(String path) {

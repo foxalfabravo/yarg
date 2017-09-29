@@ -13,24 +13,21 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.formatters.impl;
 
+import com.google.common.collect.HashBiMap;
 import com.google.common.collect.LinkedHashMultimap;
 import com.haulmont.yarg.exception.ReportingException;
 import com.haulmont.yarg.formatters.factory.FormatterFactoryInput;
-import com.haulmont.yarg.formatters.impl.xls.PdfConverter;
+import com.haulmont.yarg.formatters.impl.xls.DocumentConverter;
 import com.haulmont.yarg.formatters.impl.xlsx.*;
+import com.haulmont.yarg.formatters.impl.xlsx.hints.XslxHintProcessor;
 import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.BandOrientation;
 import com.haulmont.yarg.structure.BandVisitor;
 import com.haulmont.yarg.structure.ReportOutputType;
-import org.apache.commons.collections.CollectionUtils;
+import com.haulmont.yarg.util.docx4j.XmlCopyUtils;
+import com.opencsv.CSVWriter;
 import org.apache.commons.io.IOUtils;
 import org.apache.poi.hssf.usermodel.HSSFDateUtil;
 import org.docx4j.XmlUtils;
@@ -43,16 +40,23 @@ import org.docx4j.openpackaging.packages.SpreadsheetMLPackage;
 import org.docx4j.openpackaging.parts.PartName;
 import org.docx4j.openpackaging.parts.SpreadsheetML.CalcChain;
 import org.docx4j.openpackaging.parts.SpreadsheetML.WorksheetPart;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.xlsx4j.jaxb.Context;
 import org.xlsx4j.sml.*;
+import org.xlsx4j.sml.CTHeaderFooter;
 
+import javax.xml.bind.Marshaller;
+import javax.xml.bind.Unmarshaller;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.util.*;
+import java.util.regex.Matcher;
 
 public class XlsxFormatter extends AbstractFormatter {
-    protected PdfConverter pdfConverter;
+    protected DocumentConverter documentConverter;
     protected Document template;
     protected Document result;
 
@@ -60,27 +64,36 @@ public class XlsxFormatter extends AbstractFormatter {
     protected BandsForRanges bandsForRanges = new BandsForRanges();
     protected LinkedHashMultimap<Range, Range> rangeVerticalIntersections = LinkedHashMultimap.create();
 
-    protected Set<Cell> innerFormulas = new HashSet<>();
-    protected Set<Cell> outerFormulas = new HashSet<>();
+    protected Set<CellWithBand> innerFormulas = new HashSet<CellWithBand>();
+    protected Set<CellWithBand> outerFormulas = new HashSet<CellWithBand>();
 
-    protected Map<String, Range> lastRenderedRangeForBandName = new HashMap<>();
-    protected Map<Worksheet, Long> lastRowForSheet = new HashMap<>();
+    protected Map<String, Range> lastRenderedRangeForBandName = new HashMap<String, Range>();
+    protected Map<Worksheet, Long> lastRowForSheet = new HashMap<Worksheet, Long>();
+    protected XslxHintProcessor hintProcessor = new XslxHintProcessor();
 
     protected int previousRangesRightOffset;
+
+    protected Unmarshaller unmarshaller;
+    protected Marshaller marshaller;
+
+    protected static final Logger log = LoggerFactory.getLogger(XlsxFormatter.class);
 
     public XlsxFormatter(FormatterFactoryInput formatterFactoryInput) {
         super(formatterFactoryInput);
         supportedOutputTypes.add(ReportOutputType.xlsx);
     }
 
-    public void setPdfConverter(PdfConverter pdfConverter) {
-        this.pdfConverter = pdfConverter;
+    public void setDocumentConverter(DocumentConverter documentConverter) {
+        this.documentConverter = documentConverter;
     }
 
     @Override
     public void renderDocument() {
         init();
 
+        validateTemplateContainsNamedRange();
+
+        hintProcessor.init(template, result);
         findVerticalDependencies();
 
         result.clearWorkbook();
@@ -93,8 +106,17 @@ public class XlsxFormatter extends AbstractFormatter {
         updateCharts();
         updateFormulas();
         updateConditionalFormatting();
+        updateHeaderAndFooter();
+        updateSheetNames();
+        hintProcessor.apply();
 
         saveAndClose();
+    }
+
+    protected void validateTemplateContainsNamedRange() {
+        if (Objects.isNull(template.getWorkbook().getDefinedNames())) {
+            throw wrapWithReportingException("An error occurred while rendering document from template. Template does not contain named ranges");
+        }
     }
 
     protected void saveAndClose() {
@@ -102,17 +124,30 @@ public class XlsxFormatter extends AbstractFormatter {
             if (ReportOutputType.xlsx.equals(reportTemplate.getOutputType())) {
                 writeToOutputStream(result.getPackage(), outputStream);
                 outputStream.flush();
+            } else if (ReportOutputType.csv.equals(reportTemplate.getOutputType())) {
+                saveXlsxAsCsv(result, outputStream);
+                outputStream.flush();
             } else if (ReportOutputType.pdf.equals(reportTemplate.getOutputType())) {
-                if (pdfConverter != null) {
+                if (documentConverter != null) {
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
                     writeToOutputStream(result.getPackage(), bos);
-                    pdfConverter.convertToPdf(PdfConverter.FileType.SPREADSHEET, bos.toByteArray(), outputStream);
+                    documentConverter.convertToPdf(DocumentConverter.FileType.SPREADSHEET, bos.toByteArray(), outputStream);
                     outputStream.flush();
                 } else {
                     throw new UnsupportedOperationException(
-                            String.format(
-                                    "XlsxFormatter could not convert result to pdf without Libre/Open office connected. " +
-                                            "Please setup Libre/Open office connection details."));
+                            "XlsxFormatter could not convert result to pdf without Libre/Open office connected. " +
+                                    "Please setup Libre/Open office connection details.");
+                }
+            } else if (ReportOutputType.html.equals(reportTemplate.getOutputType())) {
+                if (documentConverter != null) {
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    writeToOutputStream(result.getPackage(), bos);
+                    documentConverter.convertToHtml(DocumentConverter.FileType.SPREADSHEET, bos.toByteArray(), outputStream);
+                    outputStream.flush();
+                } else {
+                    throw new UnsupportedOperationException(
+                            "XlsxFormatter could not convert result to html without Libre/Open office connected. " +
+                                    "Please setup Libre/Open office connection details.");
                 }
             } else {
                 throw new UnsupportedOperationException(String.format("XlsxFormatter could not output file with type [%s]", reportTemplate.getOutputType()));
@@ -120,7 +155,7 @@ public class XlsxFormatter extends AbstractFormatter {
         } catch (Docx4JException e) {
             throw wrapWithReportingException("An error occurred while saving result report", e);
         } catch (IOException e) {
-            throw wrapWithReportingException("An error occurred while saving result report to PDF", e);
+            throw wrapWithReportingException("An error occurred while saving result report to " + reportTemplate.getOutputType().getId(), e);
         } finally {
             IOUtils.closeQuietly(outputStream);
         }
@@ -128,10 +163,12 @@ public class XlsxFormatter extends AbstractFormatter {
 
     protected void init() {
         try {
-            template = Document.create((SpreadsheetMLPackage) SpreadsheetMLPackage.load(reportTemplate.getDocumentContent()));
-            result = Document.create((SpreadsheetMLPackage) SpreadsheetMLPackage.load(reportTemplate.getDocumentContent()));
+            template = Document.create(SpreadsheetMLPackage.load(reportTemplate.getDocumentContent()));
+            result = Document.create(SpreadsheetMLPackage.load(reportTemplate.getDocumentContent()));
             result.getWorkbook().getCalcPr().setCalcMode(STCalcMode.AUTO);
             result.getWorkbook().getCalcPr().setFullCalcOnLoad(true);
+            marshaller = XmlCopyUtils.createMarshaller(Context.jcSML);
+            unmarshaller = XmlCopyUtils.createUnmarshaller(Context.jcSML);
         } catch (Exception e) {
             throw wrapWithReportingException(String.format("An error occurred while loading template [%s]", reportTemplate.getDocumentName()), e);
         }
@@ -142,7 +179,9 @@ public class XlsxFormatter extends AbstractFormatter {
         if (definedNames != null) {
             List<CTDefinedName> definedName = definedNames.getDefinedName();
             for (CTDefinedName name1 : definedName) {
+                if (hintProcessor.isHintDefinedName(name1.getName())) continue;
                 for (CTDefinedName name2 : definedName) {
+                    if (hintProcessor.isHintDefinedName(name2.getName())) continue;
                     if (!name1.equals(name2)) {
                         Range range1 = Range.fromFormula(name1.getValue());
                         Range range2 = Range.fromFormula(name2.getValue());
@@ -256,12 +295,12 @@ public class XlsxFormatter extends AbstractFormatter {
         for (Document.SheetWrapper sheetWrapper : result.getWorksheets()) {
             Worksheet worksheet = sheetWrapper.getWorksheet().getJaxbElement();
             for (CTConditionalFormatting ctConditionalFormatting : worksheet.getConditionalFormatting()) {
-                List<String> references = new ArrayList<>();
+                List<String> references = new ArrayList<String>();
                 for (String ref : ctConditionalFormatting.getSqref()) {
                     Range formulaRange = Range.fromRange(sheetWrapper.getName(), ref);
                     for (Range templateRange : rangeDependencies.templates()) {
                         if (templateRange.contains(formulaRange)) {
-                            List<Range> resultRanges = new ArrayList<>(rangeDependencies.resultsForTemplate(templateRange));
+                            List<Range> resultRanges = new ArrayList<Range>(rangeDependencies.resultsForTemplate(templateRange));
                             for (Range resultRange : resultRanges) {
                                 Offset offset = calculateOffset(templateRange, resultRange);
                                 Range shift = formulaRange.copy().shift(offset.downOffset, offset.rightOffset);
@@ -278,7 +317,13 @@ public class XlsxFormatter extends AbstractFormatter {
     }
 
     protected void processOuterFormulas(int formulaCount, CTCalcChain calculationChain) {
-        for (Cell cellWithFormula : outerFormulas) {
+        for (CellWithBand cellWithWithBand : outerFormulas) {
+            Cell cellWithFormula = cellWithWithBand.cell;
+            String oldFormula = cellWithFormula.getF().getValue();
+            String newFormula = insertBandDataToString(cellWithWithBand.bandData, oldFormula);
+            if (!oldFormula.equals(newFormula)) {
+                cellWithFormula.getF().setValue(newFormula);
+            }
             Row row = (Row) cellWithFormula.getParent();
             Worksheet worksheet = getWorksheet(row);
             Set<Range> formulaRanges = Range.fromCellFormula(result.getSheetName(worksheet), cellWithFormula);
@@ -296,19 +341,44 @@ public class XlsxFormatter extends AbstractFormatter {
 
             for (Range templateRange : rangeDependencies.templates()) {
                 if (templateRange.containsAny(formulaRanges)) {
-                    List<Range> resultRanges = new ArrayList<>(rangeDependencies.resultsForTemplate(templateRange));
-                    for (Iterator<Range> iterator = resultRanges.iterator(); iterator.hasNext(); ) {
-                        Range resultRange = iterator.next();
+                    List<Range> resultRanges = new ArrayList<Range>(rangeDependencies.resultsForTemplate(templateRange));
+                    List<Range> newRanges = new ArrayList<Range>();
+                    for (Range resultRange : resultRanges) {
                         BandData bandData = bandsForRanges.bandForResultRange(resultRange);
-                        if (!bandData.getParentBand().equals(formulaParentBand)
-                                && !bandData.getParentBand().equals(formulaBand)) {
-                            iterator.remove();
+                        boolean hasSameFormulaBand = false;
+                        BandData nextParent = bandData.getParentBand();
+                        while (nextParent != null) {
+                            hasSameFormulaBand = nextParent.equals(formulaBand);
+                            if (hasSameFormulaBand) {
+                                break;
+                            }
+                            nextParent = nextParent.getParentBand();
+                        }
+                        if (hasSameFormulaBand) {
+                            newRanges.add(resultRange);
+                        }
+                    }
+                    if (newRanges.isEmpty()) {
+                        for (Range resultRange : resultRanges) {
+                            BandData bandData = bandsForRanges.bandForResultRange(resultRange);
+                            boolean hasSameParentFormulaBand = false;
+                            BandData nextParent = bandData.getParentBand();
+                            while (nextParent != null) {
+                                hasSameParentFormulaBand = nextParent.equals(formulaParentBand);
+                                if (hasSameParentFormulaBand) {
+                                    break;
+                                }
+                                nextParent = nextParent.getParentBand();
+                            }
+                            if (hasSameParentFormulaBand) {
+                                newRanges.add(resultRange);
+                            }
                         }
                     }
 
                     for (Range formulaRange : formulaRanges) {
-                        if (resultRanges.size() > 0) {
-                            Range shiftedRange = calculateFormulaRangeChange(formulaRange, templateRange, resultRanges);
+                        if (newRanges.size() > 0) {
+                            Range shiftedRange = calculateFormulaRangeChange(formulaRange, templateRange, newRanges);
                             updateFormula(cellWithFormula, formulaRange, shiftedRange, calculationChain, formulaCount++);
                         } else {
                             cellWithFormula.setF(null);
@@ -338,7 +408,13 @@ public class XlsxFormatter extends AbstractFormatter {
     protected int processInnerFormulas(CTCalcChain calculationChain) {
         int formulaCount = 1;
 
-        for (Cell cellWithFormula : innerFormulas) {
+        for (CellWithBand cellWithWithBand : innerFormulas) {
+            Cell cellWithFormula = cellWithWithBand.cell;
+            String oldFormula = cellWithFormula.getF().getValue();
+            String newFormula = insertBandDataToString(cellWithWithBand.bandData, oldFormula);
+            if (!oldFormula.equals(newFormula)) {
+                cellWithFormula.getF().setValue(newFormula);
+            }
             Row row = (Row) cellWithFormula.getParent();
             Worksheet worksheet = getWorksheet(row);
             Set<Range> formulaRanges = Range.fromCellFormula(result.getSheetName(worksheet), cellWithFormula);
@@ -420,7 +496,7 @@ public class XlsxFormatter extends AbstractFormatter {
                 if (templateSheet.getMergeCells() != null && templateSheet.getMergeCells().getMergeCell() != null) {
                     for (CTMergeCell templateMergeRegion : templateSheet.getMergeCells().getMergeCell()) {
                         Range mergeRange = Range.fromRange(templateRange.getSheet(), templateMergeRegion.getRef());
-                        if (templateRange.contains(mergeRange)) {
+                        if (templateRange.contains(mergeRange) || templateRange.isOneCellRange() && mergeRange.contains(templateRange)) {
                             Offset offset = calculateOffset(templateRange, resultRange);
                             Range resultMergeRange = mergeRange.copy().shift(offset.downOffset, offset.rightOffset);
                             CTMergeCell resultMergeRegion = new CTMergeCell();
@@ -450,40 +526,45 @@ public class XlsxFormatter extends AbstractFormatter {
 
     protected void writeHBand(BandData band) {
         Range templateRange = getBandRange(band);
-        Worksheet resultSheet = result.getSheetByName(templateRange.getSheet());
-        List<Row> resultSheetRows = resultSheet.getSheetData().getRow();
+        if (templateRange != null) {
+            Worksheet resultSheet = result.getSheetByName(templateRange.getSheet());
+            List<Row> resultSheetRows = resultSheet.getSheetData().getRow();
 
-        Row firstRow = findNextRowForHBand(band, templateRange, resultSheetRows);
-        firstRow = ensureNecessaryRowsCreated(templateRange, resultSheet, firstRow);
+            Row firstRow = findNextRowForHBand(band, templateRange, resultSheetRows);
+            firstRow = ensureNecessaryRowsCreated(templateRange, resultSheet, firstRow);
 
-        List<Cell> resultCells = copyCells(band, templateRange, resultSheetRows, firstRow, resultSheet);
+            List<Cell> resultCells = copyCells(band, templateRange, resultSheetRows, firstRow, resultSheet);
 
-        updateRangeMappings(band, templateRange, resultCells);
+            updateRangeMappings(band, templateRange, resultCells);
 
-        //render children
-        if (CollectionUtils.isNotEmpty(resultCells)) {
-            for (BandData child : band.getChildrenList()) {
-                writeBand(child);
+            //render children
+            if (resultCells != null && !resultCells.isEmpty()) {
+                for (BandData child : band.getChildrenList()) {
+                    writeBand(child);
+                }
             }
         }
     }
 
     protected void writeVBand(BandData band) {
         Range templateRange = getBandRange(band);
-        Worksheet resultSheet = result.getSheetByName(templateRange.getSheet());
-        List<Row> resultSheetRows = resultSheet.getSheetData().getRow();
+        if (templateRange != null) {
+            Worksheet resultSheet = result.getSheetByName(templateRange.getSheet());
+            List<Row> resultSheetRows = resultSheet.getSheetData().getRow();
 
-        Row firstRow = findNextRowForVBand(band, templateRange, resultSheetRows);
-        firstRow = ensureNecessaryRowsCreated(templateRange, resultSheet, firstRow);
+            Row firstRow = findNextRowForVBand(band, templateRange, resultSheetRows);
+            firstRow = ensureNecessaryRowsCreated(templateRange, resultSheet, firstRow);
 
-        List<Cell> resultCells = copyCells(band, templateRange, resultSheetRows, firstRow, resultSheet);
+            List<Cell> resultCells = copyCells(band, templateRange, resultSheetRows, firstRow, resultSheet);
 
-        updateRangeMappings(band, templateRange, resultCells);
+            updateRangeMappings(band, templateRange, resultCells);
+        }
     }
 
     protected void updateRangeMappings(BandData band, Range templateRange, List<Cell> resultCells) {
-        if (CollectionUtils.isNotEmpty(resultCells)) {
-            Range resultRange = Range.fromCells(templateRange.getSheet(), getFirst(resultCells).getR(), resultCells.get(resultCells.size() - 1).getR());
+        if (resultCells != null && !resultCells.isEmpty()) {
+            Range resultRange = Range.fromCells(templateRange.getSheet(), getFirst(resultCells).getR(),
+                    resultCells.get(resultCells.size() - 1).getR());
             rangeDependencies.addDependency(templateRange, resultRange);
             bandsForRanges.add(band, templateRange, resultRange);
             lastRenderedRangeForBandName.put(band.getName(), resultRange);
@@ -493,6 +574,10 @@ public class XlsxFormatter extends AbstractFormatter {
     protected Row findNextRowForHBand(BandData band, Range templateRange, List<Row> resultSheetRows) {
         Row firstRow = null;
         boolean isFirstLevelBand = BandData.ROOT_BAND_NAME.equals(band.getParentBand().getName());
+
+        if (isFirstLevelBand) {//we suppose that when we render HORIZONTAL first level band, it should not be any right offset
+            previousRangesRightOffset = 0;
+        }
 
         Range lastRenderedRange = getLastRenderedBandForThisLevel(band);
         if (lastRenderedRange != null) {//this band has been already rendered at least once
@@ -579,16 +664,19 @@ public class XlsxFormatter extends AbstractFormatter {
     }
 
     protected List<Cell> copyCells(BandData band, Range templateRange, List<Row> resultSheetRows, Row firstRow, Worksheet resultSheet) {
-        List<Cell> resultCells = new ArrayList<>();
+        List<Cell> resultCells = new ArrayList<Cell>();
         for (int i = 0; i <= templateRange.getLastRow() - templateRange.getFirstRow(); i++) {
             Range oneRowRange = new Range(templateRange.getSheet(),
                     templateRange.getFirstColumn(), templateRange.getFirstRow() + i,
                     templateRange.getLastColumn(), templateRange.getFirstRow() + i);
-            List<Cell> templateCells = template.getCellsByRange(oneRowRange);
-
-            Row templateRow = CollectionUtils.isNotEmpty(templateCells) ?
+            Map<CellReference, Cell> cellsForOneRowRange = template.getCellsByRange(oneRowRange);
+            List<Cell> templateCells = new ArrayList<Cell>(cellsForOneRowRange.values());
+            Row templateRow = !templateCells.isEmpty() ?
                     (Row) templateCells.get(0).getParent() :
                     resultSheet.getSheetData().getRow().get(oneRowRange.getFirstRow() - 1);
+
+            createFakeTemplateCellsForEmptyOnes(oneRowRange, cellsForOneRowRange, templateCells);
+
             Row resultRow = resultSheetRows.get((int) (firstRow.getR() + i - 1));
 
             List<Cell> currentRowResultCells = copyCells(templateRange, band, resultRow, templateCells);
@@ -598,6 +686,38 @@ public class XlsxFormatter extends AbstractFormatter {
             copyRowSettings(templateRow, resultRow, getWorksheet(templateRow), getWorksheet(resultRow));
         }
         return resultCells;
+    }
+
+    /**
+     * XLSX document does not store empty cells and it might be an issue for formula calculations and etc.
+     * So we need to create fake template cell for each empty cell.
+     */
+    protected void createFakeTemplateCellsForEmptyOnes(Range oneRowRange,
+                                                       Map<CellReference, Cell> cellsForOneRowRange,
+                                                       List<Cell> templateCells) {
+        if (oneRowRange.toCellReferences().size() != templateCells.size()) {
+            final HashBiMap<CellReference, Cell> referencesToCells = HashBiMap.create(cellsForOneRowRange);
+
+            for (CellReference cellReference : oneRowRange.toCellReferences()) {
+                if (!cellsForOneRowRange.containsKey(cellReference)) {
+                    Cell newCell = Context.getsmlObjectFactory().createCell();
+                    newCell.setV(null);
+                    newCell.setT(STCellType.STR);
+                    newCell.setR(cellReference.toReference());
+                    templateCells.add(newCell);
+                    referencesToCells.put(cellReference, newCell);
+                }
+            }
+
+            Collections.sort(templateCells, new Comparator<Cell>() {
+                @Override
+                public int compare(Cell o1, Cell o2) {
+                    CellReference cellReference1 = referencesToCells.inverse().get(o1);
+                    CellReference cellReference2 = referencesToCells.inverse().get(o2);
+                    return cellReference1.compareTo(cellReference2);
+                }
+            });
+        }
     }
 
     protected Range getLastRenderedBandForThisLevel(BandData band) {
@@ -615,7 +735,8 @@ public class XlsxFormatter extends AbstractFormatter {
     protected Range getBandRange(BandData band) {
         CTDefinedName targetRange = template.getDefinedName(band.getName());
         if (targetRange == null) {
-            throw wrapWithReportingException(String.format("Could not find named range for band [%s]", band.getName()));
+            log.info("Could not find named range for band {}", band.getName());
+            return null;
         }
 
         return Range.fromFormula(targetRange.getValue());
@@ -637,19 +758,12 @@ public class XlsxFormatter extends AbstractFormatter {
     protected List<Cell> copyCells(Range templateRange, BandData bandData, Row newRow, List<Cell> templateCells) {
         List<Cell> resultCells = new ArrayList<>();
 
-        //if no template cells (xlsx doesn't store empty cells) - create at least 1, to help rendering
-        if (CollectionUtils.isEmpty(templateCells)) {
-            Cell newCell = createEmptyCell(templateRange, bandData, newRow);
-            resultCells.add(newCell);
-        }
-
-
         Worksheet resultWorksheet = getWorksheet(newRow);
         for (Cell templateCell : templateCells) {
-            Cell newCell = XmlUtils.deepCopy(templateCell, Context.jcSML);
+            Cell newCell = copyCell(templateCell);
 
             if (newCell.getF() != null) {
-                addFormulaForPostProcessing(templateRange, newRow, templateCell, newCell);
+                addFormulaForPostProcessing(templateRange, bandData, newRow, templateCell, newCell);
             }
 
             resultCells.add(newCell);
@@ -657,10 +771,11 @@ public class XlsxFormatter extends AbstractFormatter {
             CellReference tempRef = new CellReference(templateRange.getSheet(), templateCell);
             CellReference newRef = new CellReference(templateRange.getSheet(), newCell.getR());
             newRef.move(newRow.getR().intValue(), newRef.getColumn());
-            if (bandData.getOrientation() == BandOrientation.VERTICAL) {
-                newRef.shift(0, previousRangesRightOffset);
 
-            }
+            //if we have vertical band or horizontal band right after vertical band - it should be shifted
+            //only if there is vertical intersection with vertical band?
+            newRef.shift(0, previousRangesRightOffset);
+
             newCell.setR(newRef.toReference());
 
             newRow.getC().add(newCell);
@@ -684,8 +799,15 @@ public class XlsxFormatter extends AbstractFormatter {
                 resultColumn.setMax(newRef.getColumn());
                 resultWorksheet.getCols().get(0).getCol().add(resultColumn);
             }
+
+            hintProcessor.add(tempRef, templateCell, newCell, bandData);
+
         }
         return resultCells;
+    }
+
+    protected Cell copyCell(Cell cell) {
+        return XmlCopyUtils.copyCell(cell, unmarshaller, marshaller);
     }
 
     protected Worksheet getWorksheet(Row newRow) {
@@ -693,29 +815,13 @@ public class XlsxFormatter extends AbstractFormatter {
         return (Worksheet) resultSheetData.getParent();
     }
 
-    protected Cell createEmptyCell(Range templateRange, BandData bandData, Row newRow) {
-        Cell newCell = Context.getsmlObjectFactory().createCell();
-        newRow.getC().add(newCell);
-        newCell.setParent(newRow);
-
-        CellReference newRef = new CellReference(templateRange.getSheet(), templateRange.getFirstColumn(), templateRange.getFirstRow());
-        newRef.move(newRow.getR().intValue(), newRef.getColumn());
-        if (bandData.getOrientation() == BandOrientation.VERTICAL) {
-            newRef.shift(0, previousRangesRightOffset);
-
-        }
-
-        newCell.setR(newRef.toReference());
-        return newCell;
-    }
-
-    protected void addFormulaForPostProcessing(Range templateRange, Row newRow, Cell templateCell, Cell newCell) {
+    protected void addFormulaForPostProcessing(Range templateRange, BandData bandData, Row newRow, Cell templateCell, Cell newCell) {
         Worksheet worksheet = getWorksheet(newRow);
         Set<Range> formulaRanges = Range.fromCellFormula(result.getSheetName(worksheet), templateCell);
         if (templateRange.containsAny(formulaRanges)) {
-            innerFormulas.add(newCell);
+            innerFormulas.add(new CellWithBand(bandData, newCell));
         } else {
-            outerFormulas.add(newCell);
+            outerFormulas.add(new CellWithBand(bandData, newCell));
         }
     }
 
@@ -724,13 +830,18 @@ public class XlsxFormatter extends AbstractFormatter {
         newRow.setCustomHeight(true);
         CTPageBreak rowBreaks = templateWorksheet.getRowBreaks();
         if (rowBreaks != null && rowBreaks.getBrk() != null) {
+            CTPageBreak resultWorksheetRowBreaks = resultWorksheet.getRowBreaks();
             for (CTBreak templateBreak : rowBreaks.getBrk()) {
                 if (templateRow.getR().equals(templateBreak.getId())) {
                     CTBreak newBreak = XmlUtils.deepCopy(templateBreak, Context.jcSML);
                     newBreak.setId(newRow.getR());
-                    resultWorksheet.getRowBreaks().getBrk().add(newBreak);
+                    resultWorksheetRowBreaks.getBrk().add(newBreak);
                 }
             }
+
+            long rowBreaksCount = resultWorksheetRowBreaks.getBrk().size();
+            resultWorksheetRowBreaks.setCount(rowBreaksCount);
+            resultWorksheetRowBreaks.setManualBreakCount(rowBreaksCount);
         }
     }
 
@@ -786,7 +897,7 @@ public class XlsxFormatter extends AbstractFormatter {
     }
 
     protected <T> T getFirst(List<T> list) {
-        if (CollectionUtils.isNotEmpty(list)) {
+        if (list != null && !list.isEmpty()) {
             return list.get(0);
         }
 
@@ -794,16 +905,94 @@ public class XlsxFormatter extends AbstractFormatter {
     }
 
     protected <T> T getLast(List<T> list) {
-        if (CollectionUtils.isNotEmpty(list)) {
+        if (list != null && !list.isEmpty()) {
             return list.get(list.size() - 1);
         }
 
         return null;
     }
 
+    protected void saveXlsxAsCsv(Document document, OutputStream outputStream) throws IOException, Docx4JException {
+        CSVWriter writer = new CSVWriter(new OutputStreamWriter(outputStream), ';', CSVWriter.DEFAULT_QUOTE_CHARACTER);
+
+        for (Document.SheetWrapper sheetWrapper : document.getWorksheets()) {
+            Worksheet worksheet = sheetWrapper.getWorksheet().getContents();
+            for (Row row : worksheet.getSheetData().getRow()) {
+                String rows[] = new String[row.getC().size()];
+                List<Cell> cells = row.getC();
+
+                boolean emptyRow = true;
+                for (int i = 0; i < cells.size(); i++) {
+                    Cell cell = cells.get(i);
+                    String value = cell.getV();
+                    rows[i] = value;
+                    if (value != null && !value.isEmpty())
+                        emptyRow = false;
+                }
+
+                if (!emptyRow)
+                    writer.writeNext(rows);
+            }
+        }
+        writer.close();
+    }
+
     protected void writeToOutputStream(SpreadsheetMLPackage mlPackage, OutputStream outputStream) throws Docx4JException {
         SaveToZipFile saver = new SaveToZipFile(mlPackage);
         saver.save(outputStream);
+    }
+
+    protected void updateHeaderAndFooter() {
+        for (Document.SheetWrapper sheetWrapper : result.getWorksheets()) {
+            Worksheet worksheet = sheetWrapper.getWorksheet().getJaxbElement();
+            if (worksheet.getHeaderFooter() != null) {
+                CTHeaderFooter headerFooter = worksheet.getHeaderFooter();
+                if (headerFooter.getOddHeader() != null) {
+                    headerFooter.setOddHeader(insertBandDataToString(headerFooter.getOddHeader()));
+                }
+                if (headerFooter.getOddFooter() != null) {
+                    headerFooter.setOddFooter(insertBandDataToString(headerFooter.getOddFooter()));
+                }
+            }
+        }
+    }
+
+    protected void updateSheetNames() {
+        Sheets sheets = result.getWorkbook().getSheets();
+        if (sheets != null && sheets.getSheet() != null) {
+            for (Sheet sheet : sheets.getSheet()) {
+                if (sheet.getName() != null) {
+                    sheet.setName(insertBandDataToString(sheet.getName()));
+                }
+            }
+        }
+    }
+
+    protected String insertBandDataToString(String resultStr) {
+        List<String> parametersToInsert = new ArrayList<String>();
+        Matcher matcher = UNIVERSAL_ALIAS_PATTERN.matcher(resultStr);
+        while (matcher.find()) {
+            parametersToInsert.add(unwrapParameterName(matcher.group()));
+        }
+        for (String parameterName : parametersToInsert) {
+            BandPathAndParameterName bandPathAndParameterName = separateBandNameAndParameterName(parameterName);
+            BandData bandData = findBandByPath(bandPathAndParameterName.getBandPath());
+            Object value = bandData.getData().get(bandPathAndParameterName.getParameterName());
+            String fullParameterName = bandData.getName() + "." + parameterName;
+            String valueStr = formatValue(value, parameterName, fullParameterName);
+            resultStr = inlineParameterValue(resultStr, parameterName, valueStr);
+        }
+        return resultStr;
+    }
+
+    protected static class CellWithBand {
+        protected BandData bandData;
+        protected Cell cell;
+
+        public CellWithBand(BandData bandData, Cell cell) {
+            this.bandData = bandData;
+            this.cell = cell;
+        }
     }
 
     protected static class Offset {

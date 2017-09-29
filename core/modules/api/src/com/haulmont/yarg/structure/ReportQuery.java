@@ -13,12 +13,6 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.structure;
 
 import java.io.Serializable;
@@ -43,6 +37,8 @@ public interface ReportQuery extends Serializable {
      * See com.haulmont.yarg.loaders.factory.ReportLoaderFactory implementations and com.haulmont.yarg.loaders.factory.DefaultLoaderFactory for default values.
      */
     String getLoaderType();
+
+    Boolean getProcessTemplate();
 
     Map<String, Object> getAdditionalParams();
 }

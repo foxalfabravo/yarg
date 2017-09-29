@@ -18,8 +18,10 @@ package com.haulmont.yarg.loaders.impl;
 
 import com.haulmont.yarg.exception.DataLoadingException;
 import com.haulmont.yarg.structure.BandData;
-import org.apache.commons.lang.StringUtils;
+import groovy.text.GStringTemplateEngine;
+import org.apache.commons.lang3.StringUtils;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -41,16 +43,18 @@ public abstract class AbstractDbDataLoader extends AbstractDataLoader {
                 Object[] resultRecord = (Object[]) resultRecordObject;
 
                 if (resultRecord.length != parametersNames.size()) {
-                    throw new DataLoadingException(String.format("Result set size [%d] does not match output fields count [%s]. Detected output fields %s", resultRecord.length, parametersNames.size(), parametersNames));
+                    throw new DataLoadingException(String.format("Please specify aliases for all output fields of the query.\nDetails: result set size [%d] does not match output fields count [%s]. Detected output fields %s", resultRecord.length, parametersNames.size(), parametersNames));
                 }
 
                 for (Integer i = 0; i < resultRecord.length; i++) {
                     OutputValue outputValue = parametersNames.get(i);
                     Object value = resultRecord[i];
                     putValue(outputValues, outputValue, value);
-
                 }
             } else {
+                if (parametersNames.isEmpty()) {
+                    throw new DataLoadingException("Please specify aliases for all output fields of the query.\nDetails: result set size 1 does not match output fields count 0.");
+                }
                 OutputValue outputValue = parametersNames.get(0);
                 putValue(outputValues, outputValue, resultRecordObject);
             }
@@ -101,6 +105,9 @@ public abstract class AbstractDbDataLoader extends AbstractDataLoader {
             String andLastRgxp = expressionRgxp + andRegexp;
             String orLastRgxp = expressionRgxp + orRegexp;
 
+            String isNullRgxp = paramNameRegexp + "\\s+is\\s+null";
+            String isNotNullRgxp = paramNameRegexp + "\\s+is\\s+not\\s+null";
+
             String boundsRegexp = "\\[\\[.+?" + paramNameRegexp + ".+?\\]\\]";
 
             if (paramValue == null && reportParams != null && reportParams.containsKey(paramName)) {//if value == null && this is user parameter - remove condition from query
@@ -110,6 +117,9 @@ public abstract class AbstractDbDataLoader extends AbstractDataLoader {
                 paramsToRemoveFromQuery.put("(?i)" + orLastRgxp, " 1=0 or ");
 
                 paramsToRemoveFromQuery.put("(?i)" + expressionRgxp, " 1=1 ");
+                paramsToRemoveFromQuery.put("(?i)" + isNullRgxp, " 1=1 ");
+                paramsToRemoveFromQuery.put("(?i)" + isNotNullRgxp, " 1=0 ");
+
                 paramsToRemoveFromQuery.put("(?i)" + boundsRegexp, " ");
             } else if (query.contains(alias)) {//otherwise - create parameter and save each entry's position
                 Pattern pattern = Pattern.compile(paramNameRegexp);
@@ -151,13 +161,25 @@ public abstract class AbstractDbDataLoader extends AbstractDataLoader {
         return new QueryPack(query.trim().replaceAll(" +", " "), queryParameters.toArray(new QueryParameter[queryParameters.size()]));
     }
 
-    protected void addParentBandDataToParameters(BandData parentBand, Map<String, Object> currentParams) {
-        if (parentBand != null) {
-            String parentBandName = parentBand.getName();
-
-            for (Map.Entry<String, Object> entry : parentBand.getData().entrySet()) {
-                currentParams.put(parentBandName + "." + entry.getKey(), entry.getValue());
+    @SuppressWarnings("unchecked")
+    protected String processQueryTemplate(String query, BandData parentBand, Map<String, Object> reportParams) {
+        try {
+            GStringTemplateEngine engine = new GStringTemplateEngine();
+            Map bindings = new HashMap();
+            if (reportParams != null) {
+                bindings.putAll(reportParams);
             }
+            while (parentBand != null) {
+                if (parentBand.getData() != null) {
+                    bindings.put(parentBand.getName(), parentBand.getData());
+                }
+                parentBand = parentBand.getParentBand();
+            }
+            return engine.createTemplate(query).make(bindings).toString();
+        } catch (ClassNotFoundException e) {
+            throw new DataLoadingException(String.format("An error occurred while loading processing query template [%s]", query), e);
+        } catch (IOException e) {
+            throw new DataLoadingException(String.format("An error occurred while loading processing query template [%s]", query), e);
         }
     }
 
@@ -273,6 +295,11 @@ public abstract class AbstractDbDataLoader extends AbstractDataLoader {
 
         public String getSynonym() {
             return synonym;
+        }
+
+        @Override
+        public String toString() {
+            return valueName;
         }
     }
 }

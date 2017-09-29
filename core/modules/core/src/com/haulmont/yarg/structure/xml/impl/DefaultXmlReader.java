@@ -13,12 +13,6 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.structure.xml.impl;
 
 import com.haulmont.yarg.exception.ReportingXmlException;
@@ -38,10 +32,7 @@ import javax.xml.parsers.SAXParserFactory;
 import javax.xml.transform.Source;
 import javax.xml.transform.stream.StreamSource;
 import javax.xml.validation.SchemaFactory;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.StringReader;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -53,7 +44,7 @@ public class DefaultXmlReader implements XmlReader {
     @Override
     public Report parseXml(String xml) throws IOException {
         try {
-            SAXReader reader = null;
+            SAXReader reader;
             try {
                 SAXParserFactory factory = SAXParserFactory.newInstance();
 
@@ -78,6 +69,7 @@ public class DefaultXmlReader implements XmlReader {
             List<ReportParameter> reportParameters = parseInputParameters(rootElement);
             List<ReportFieldFormat> reportFieldFormats = parseValueFormats(rootElement);
             BandBuilder rootBandDefinitionBuilder = new BandBuilder().name(BandData.ROOT_BAND_NAME);
+            parseQueries(rootElement.element("rootBand"), rootBandDefinitionBuilder);
             parseChildBandDefinitions(rootElement.element("rootBand"), rootBandDefinitionBuilder);
             ReportBand rootBandDefinition = rootBandDefinitionBuilder.build();
             String reportName = rootElement.attribute("name").getText();
@@ -98,7 +90,7 @@ public class DefaultXmlReader implements XmlReader {
      * @param documentPath - path to document (file system path or other if overriden)
      * @throws FileNotFoundException
      */
-    protected FileInputStream getDocumentContent(String documentPath) throws FileNotFoundException {
+    protected InputStream getDocumentContent(String documentPath) throws FileNotFoundException {
         return new FileInputStream(documentPath);
     }
 
@@ -181,22 +173,25 @@ public class DefaultXmlReader implements XmlReader {
                                 .name(childBandName)
                                 .orientation(orientation);
 
-                Element reportQueriesElement = childBandElement.element("queries");
-
-                if (reportQueriesElement != null) {
-                    List<Element> reportQueryElements = reportQueriesElement.elements("query");
-                    for (Element queryElement : reportQueryElements) {
-                        String script = queryElement.element("script").getText();
-                        String type = queryElement.attribute("type").getText();
-                        String queryName = queryElement.attribute("name").getText();
-
-                        childBandDefinitionBuilder.query(queryName, script, type);
-                    }
-                }
-
+                parseQueries(childBandElement, childBandDefinitionBuilder);
                 parseChildBandDefinitions(childBandElement, childBandDefinitionBuilder);
                 ReportBand childBandDefinition = childBandDefinitionBuilder.build();
                 parentBandDefinitionBuilder.child(childBandDefinition);
+            }
+        }
+    }
+
+    private void parseQueries(Element bandElement, BandBuilder bandDefinitionBuilder) {
+        Element reportQueriesElement = bandElement.element("queries");
+
+        if (reportQueriesElement != null) {
+            List<Element> reportQueryElements = reportQueriesElement.elements("query");
+            for (Element queryElement : reportQueryElements) {
+                String script = queryElement.element("script").getText();
+                String type = queryElement.attribute("type").getText();
+                String queryName = queryElement.attribute("name").getText();
+
+                bandDefinitionBuilder.query(queryName, script, type);
             }
         }
     }

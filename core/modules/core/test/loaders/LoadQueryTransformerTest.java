@@ -14,7 +14,7 @@ import com.haulmont.yarg.loaders.impl.AbstractDbDataLoader;
 import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.ReportQuery;
 import junit.framework.Assert;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.junit.Test;
 
 import java.util.Arrays;
@@ -81,6 +81,33 @@ public class LoadQueryTransformerTest extends AbstractDbDataLoader {
         Assert.assertEquals("param1", queryPack.getParams()[0].getValue());
         Assert.assertEquals("param2", queryPack.getParams()[1].getValue());
         Assert.assertEquals("param1", queryPack.getParams()[2].getValue());
+    }
+
+    @Test
+    public void testTemplate() throws Exception {
+        String query = "select id as id from user where <% if (id != null) {%>id = \\${id}<%} else {%>id is null<%}%>";
+
+        Map<String, Object> params = new HashMap<String, Object>();
+        params.put("id", "id");
+        String newQuery = processQueryTemplate(query, null, params);
+        Assert.assertEquals("select id as id from user where id = ${id}", newQuery);
+
+        params.put("id", null);
+        newQuery = processQueryTemplate(query, null, params);
+        Assert.assertEquals("select id as id from user where id is null", newQuery);
+
+        query = "select id as id from user where <% if (Root.name != null) {%>id = \\${id}<%} else {%>id is null<%}%>";
+        BandData parentBand = new BandData("Root");
+        Map<String, Object> bandData = new HashMap<String, Object>();
+        parentBand.setData(bandData);
+        bandData.put("name", "name");
+
+        newQuery = processQueryTemplate(query, parentBand, params);
+        Assert.assertEquals("select id as id from user where id = ${id}", newQuery);
+
+        bandData.put("name", null);
+        newQuery = processQueryTemplate(query, parentBand, params);
+        Assert.assertEquals("select id as id from user where id is null", newQuery);
     }
 
     @Test

@@ -7,7 +7,7 @@ import org.docx4j.wml.Text;
 
 import java.util.regex.Matcher;
 
-import static org.apache.commons.lang.StringUtils.isBlank;
+import static org.apache.commons.lang3.StringUtils.isBlank;
 
 /**
 * @author degtyarjov
@@ -22,6 +22,7 @@ public class TextWrapper {
         this.text = text;
     }
 
+    //todo eude - merge with com.haulmont.yarg.formatters.impl.DocxFormatterDelegate.handleStringWithAliases()
     public void fillTextWithBandData() {
         Matcher matcher = AbstractFormatter.ALIAS_WITH_BAND_NAME_PATTERN.matcher(text.getValue());
         while (matcher.find()) {

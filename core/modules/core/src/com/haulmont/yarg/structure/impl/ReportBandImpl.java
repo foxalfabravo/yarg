@@ -13,12 +13,6 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.structure.impl;
 
 import com.google.common.base.Preconditions;
@@ -38,7 +32,7 @@ public class ReportBandImpl implements ReportBand {
     protected List<ReportQuery> reportQueries;
     protected BandOrientation orientation;
 
-    ReportBandImpl() {
+    protected ReportBandImpl() {
         this.childrenBandDefinitions = new ArrayList<ReportBand>();
         this.reportQueries = new ArrayList<ReportQuery>();
         this.orientation = BandOrientation.HORIZONTAL;
@@ -66,7 +60,7 @@ public class ReportBandImpl implements ReportBand {
         this(instanceToCopy.getName(), instanceToCopy.getParent(), instanceToCopy.getChildren(), instanceToCopy.getReportQueries(), instanceToCopy.getBandOrientation());
     }
 
-    void validate() {
+    protected void validate() {
         Preconditions.checkNotNull(this.name, "\"name\" parameter can not be null");
         Preconditions.checkNotNull(this.orientation, "\"orientation\" parameter can not be null");
     }

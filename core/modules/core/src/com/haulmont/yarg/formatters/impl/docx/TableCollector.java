@@ -10,30 +10,24 @@ import org.docx4j.wml.Text;
 import org.docx4j.wml.Tr;
 import org.jvnet.jaxb2_commons.ppp.Child;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.Stack;
+import java.util.*;
 import java.util.regex.Matcher;
 
-/**
-* @author degtyarjov
-* @version $Id$
-*/
 public class TableCollector extends TraversalUtil.CallbackImpl {
     private DocxFormatterDelegate docxFormatter;
     protected Stack<TableManager> currentTables = new Stack<TableManager>();
-    protected Set<TableManager> tableManagers = new HashSet<TableManager>();
-    protected boolean skipCurrentTable = false;
+    protected Set<TableManager> tableManagers = new LinkedHashSet<TableManager>();
 
     public TableCollector(DocxFormatterDelegate docxFormatter) {this.docxFormatter = docxFormatter;}
 
     public List<Object> apply(Object object) {
-        if (skipCurrentTable) return null;
+        final TableManager currentTable = !currentTables.isEmpty() ? currentTables.peek() : null;
+        if (currentTable == null || currentTable.isSkipIt()) {
+            return null;
+        }
 
         if (object instanceof Tr) {
             Tr currentRow = (Tr) object;
-            final TableManager currentTable = currentTables.peek();
 
             if (currentTable.firstRow == null) {
                 currentTable.firstRow = currentRow;
@@ -41,18 +35,34 @@ public class TableCollector extends TraversalUtil.CallbackImpl {
                 findNameForCurrentTable(currentTable);
 
                 if (currentTable.bandName == null) {
-                    skipCurrentTable = true;
+                    currentTable.setSkipIt(true);
                 } else {
                     tableManagers.add(currentTable);
                 }
             }
 
             if (currentTable.rowWithAliases == null) {
-                RegexpFinder aliasFinder = new RegexpFinder<P>(docxFormatter, AbstractFormatter.UNIVERSAL_ALIAS_PATTERN, P.class);
+                RegexpCollectionFinder<P> aliasFinder = new RegexpCollectionFinder<P>(docxFormatter, AbstractFormatter.UNIVERSAL_ALIAS_PATTERN, P.class);
                 new TraversalUtil(currentRow, aliasFinder);
-
-                if (aliasFinder.getValue() != null) {
-                    currentTable.rowWithAliases = currentRow;
+                List<String> foundAliases = aliasFinder.getValues();
+                if (!foundAliases.isEmpty()) {
+                    boolean fromCurrentBand = false;
+                    for (String foundAlias : foundAliases) {
+                        String parameterName = docxFormatter.unwrapParameterName(foundAlias);
+                        if (parameterName != null) {
+                            String[] parts = parameterName.split("\\.");
+                            if (parts.length == 1) {
+                                fromCurrentBand = true;
+                                break;
+                            } else if (docxFormatter.findBandByPath(parts[0]) == null) {
+                                fromCurrentBand = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (fromCurrentBand) {
+                        currentTable.rowWithAliases = currentRow;
+                    }
                 }
             }
         }
@@ -65,12 +75,14 @@ public class TableCollector extends TraversalUtil.CallbackImpl {
                 new RegexpFinder<P>(docxFormatter, AbstractFormatter.BAND_NAME_DECLARATION_PATTERN, P.class) {
                     @Override
                     protected void onFind(P paragraph, Matcher matcher) {
-                        super.onFind(paragraph, matcher);
-                        currentTable.bandName = matcher.group(1);
-                        String bandNameDeclaration = matcher.group();
-                        Set<Text> mergedTexts = new TextMerger(paragraph, bandNameDeclaration).mergeMatchedTexts();
-                        for (Text text : mergedTexts) {
-                            text.setValue(text.getValue().replace(bandNameDeclaration, ""));
+                        if (currentTable.bandName == null) {
+                            super.onFind(paragraph, matcher);
+                            currentTable.bandName = matcher.group(1);
+                            String bandNameDeclaration = matcher.group();
+                            Set<Text> mergedTexts = new TextMerger(paragraph, bandNameDeclaration).mergeMatchedTexts();
+                            for (Text text : mergedTexts) {
+                                text.setValue(text.getValue().replace(bandNameDeclaration, ""));
+                            }
                         }
                     }
                 });
@@ -99,10 +111,9 @@ public class TableCollector extends TraversalUtil.CallbackImpl {
                 }
 
                 if (o instanceof Tbl) {
-                    currentTables.pop();
-                    skipCurrentTable = false;
+                    TableManager currentTable = currentTables.pop();
+                    currentTable.setSkipIt(false);
                 }
-
             }
         }
     }

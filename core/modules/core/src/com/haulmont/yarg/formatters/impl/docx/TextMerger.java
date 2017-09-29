@@ -1,7 +1,7 @@
 package com.haulmont.yarg.formatters.impl.docx;
 
 import org.docx4j.XmlUtils;
-import org.docx4j.wml.P;
+import org.docx4j.wml.ContentAccessor;
 import org.docx4j.wml.R;
 import org.docx4j.wml.Text;
 
@@ -9,10 +9,6 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/**
-* @author degtyarjov
-* @version $Id$
-*/
 public class TextMerger {
     protected Set<Text> resultingTexts = new HashSet<Text>();
     protected Set<Text> textsToRemove = new HashSet<Text>();
@@ -21,11 +17,11 @@ public class TextMerger {
     protected Set<Text> mergedTexts = null;
     protected StringBuilder mergedTextsString = null;
     protected Pattern regexpPattern;
-    protected P paragraph;
+    protected ContentAccessor paragraph;
     protected String regexp;
     protected String first2SymbolsOfRegexp;
 
-    public TextMerger(P paragraph, String regexp) {
+    public TextMerger(ContentAccessor paragraph, String regexp) {
         this.paragraph = paragraph;
         this.regexp = regexp;
         this.regexpPattern = Pattern.compile(regexp);
@@ -37,9 +33,9 @@ public class TextMerger {
             if (paragraphContentObject instanceof R) {
                 R currentRun = (R) paragraphContentObject;
                 for (Object runContentObject : currentRun.getContent()) {
-                    Object unwrappedRunContenObject = XmlUtils.unwrap(runContentObject);
-                    if (unwrappedRunContenObject instanceof Text) {
-                        handleText((Text) unwrappedRunContenObject);
+                    Object unwrappedRunContentObject = XmlUtils.unwrap(runContentObject);
+                    if (unwrappedRunContentObject instanceof Text) {
+                        handleText((Text) unwrappedRunContentObject);
                     }
                 }
             }
@@ -102,7 +98,7 @@ public class TextMerger {
             }
         }
 
-        if (!containsStartOfRegexp(startText.getValue().replace(regexp, ""))) {
+        if (!containsStartOfRegexp(startText.getValue().replaceAll(regexp, ""))) {
             startText = null;
             mergedTexts = null;
             mergedTextsString = null;

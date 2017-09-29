@@ -13,12 +13,6 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.structure;
 
 import java.io.Serializable;
@@ -32,7 +26,7 @@ public interface Report extends Serializable {
     String getName();
 
     /**
-     * @return map with report templates <templateCode, template>
+     * @return map with report templates &lt;templateCode, template&gt;
      */
     Map<String, ReportTemplate> getReportTemplates();
 

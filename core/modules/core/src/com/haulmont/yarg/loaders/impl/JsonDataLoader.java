@@ -13,37 +13,23 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.loaders.impl;
 
 import com.haulmont.yarg.exception.DataLoadingException;
-import com.haulmont.yarg.loaders.ReportDataLoader;
 import com.haulmont.yarg.loaders.impl.json.JsonMap;
 import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.ReportQuery;
 import com.jayway.jsonpath.JsonPath;
-import net.minidev.json.JSONObject;
-import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Loads data from json string
  * Uses JsonPath to access necessary parts of json object
- *
  * Example:
- *
  * JSON:
  * { "store": {
  * "book": [
@@ -65,45 +51,28 @@ import java.util.regex.Pattern;
  * }
  * }
  * }
- *
  * Query string:
  * parameter=param1 $.store.book[*]
- *
  * We get json string from parameter param1 and select all "book" objects from the "store" object
- *
  */
-public class JsonDataLoader implements ReportDataLoader {
+public class JsonDataLoader extends AbstractDataLoader {
     protected Pattern parameterPattern = Pattern.compile("parameter=([A-z0-9_]+)");
 
     @Override
-    public List<Map<String, Object>> loadData(ReportQuery reportQuery, BandData parentBand, Map<String, Object> params) {
-        List<Map<String, Object>> result = new ArrayList<Map<String, Object>>();
-
+    public List<Map<String, Object>> loadData(ReportQuery reportQuery, BandData parentBand, Map<String, Object> reportParams) {
+        Map<String, Object> currentParams = copyParameters(reportParams);
 
         Matcher matcher = parameterPattern.matcher(reportQuery.getScript());
         String parameterName = getParameterName(matcher);
 
+        addParentBandDataToParametersRecursively(parentBand, currentParams);
+
+        List<Map<String, Object>> result;
+
         if (parameterName != null) {
-            Object parameterValue = params.get(parameterName);
+            Object parameterValue = currentParams.get(parameterName);
             if (parameterValue != null && StringUtils.isNotBlank(parameterValue.toString())) {
-                String json = parameterValue.toString();
-                String script = matcher.replaceAll("");
-
-                if (StringUtils.isBlank(script)) {
-                    throw new DataLoadingException(
-                            String.format("The script doesn't contain json path expression. " +
-                                    "Script [%s]", reportQuery.getScript()));
-                }
-
-                try {
-                    Object scriptResult = JsonPath.read(json, script);
-                    parseScriptResult(result, script, scriptResult);
-                } catch (com.jayway.jsonpath.PathNotFoundException e) {
-                    return Collections.emptyList();
-                } catch (Throwable e) {
-                    throw new DataLoadingException(
-                            String.format("An error occurred while loading data with script [%s]", reportQuery.getScript()), e);
-                }
+                result = loadDataFromScript(reportQuery, currentParams, matcher, parameterValue);
             } else {
                 return Collections.emptyList();
             }
@@ -115,14 +84,52 @@ public class JsonDataLoader implements ReportDataLoader {
         return result;
     }
 
+    protected List<Map<String, Object>> loadDataFromScript(ReportQuery reportQuery, Map<String, Object> currentParams,
+                                                           Matcher matcher, Object parameterValue) {
+        List<Map<String, Object>> result;
+        String json = parameterValue.toString();
+        String script = matcher.replaceAll("");
+
+        if (StringUtils.isBlank(script)) {
+            throw new DataLoadingException(
+                    String.format("The script doesn't contain json path expression. " +
+                            "Script [%s]", reportQuery.getScript()));
+        }
+
+        matcher = AbstractDbDataLoader.COMMON_PARAM_PATTERN.matcher(script);
+        while (matcher.find()) {
+            String parameter = matcher.group(1);
+            script = matcher.replaceAll(String.valueOf(currentParams.get(parameter)));
+        }
+
+        result = extractScriptResult(json, script, reportQuery);
+        return result;
+    }
+
+    protected List<Map<String, Object>> extractScriptResult(String jsonData, String jsonPathScript, ReportQuery reportQuery) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        try {
+            Object scriptResult = JsonPath.read(jsonData, jsonPathScript);
+            parseScriptResult(result, jsonPathScript, scriptResult);
+        } catch (com.jayway.jsonpath.PathNotFoundException e) {
+            return Collections.emptyList();
+        } catch (Throwable e) {
+            throw new DataLoadingException(
+                    String.format("An error occurred while loading data with script [%s]", reportQuery.getScript()), e);
+        }
+
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
     protected void parseScriptResult(List<Map<String, Object>> result, String script, Object scriptResult) {
         if (scriptResult instanceof List) {//JSONArray is also list
             List theList = (List) scriptResult;
-            if (CollectionUtils.isNotEmpty(theList)) {
+            if (!theList.isEmpty()) {
                 Object listObject = theList.get(0);
-                if (listObject instanceof JSONObject) {
+                if (listObject instanceof Map) {
                     for (Object object : theList) {
-                        result.add(createMap((JSONObject) object));
+                        result.add(createMap((Map) object));
                     }
                 } else {
                     throw new DataLoadingException(
@@ -131,8 +138,8 @@ public class JsonDataLoader implements ReportDataLoader {
                                     "Script [%s]", listObject, script));
                 }
             }
-        } else if (scriptResult instanceof JSONObject) {
-            result.add(createMap((JSONObject) scriptResult));
+        } else if (scriptResult instanceof Map) {
+            result.add(createMap((Map) scriptResult));
         } else {
             throw new DataLoadingException(
                     String.format("The script collects neither object nor list of objects. " +
@@ -148,7 +155,32 @@ public class JsonDataLoader implements ReportDataLoader {
         return null;
     }
 
-    protected Map<String, Object> createMap(JSONObject jsonObject) {
+    protected Map<String, Object> createMap(Map jsonObject) {
         return new JsonMap(jsonObject);
+    }
+
+    protected Map<String, Object> copyParameters(Map<String, Object> parametersToCopy) {
+        Map<String, Object> copyParams = new HashMap<>();
+        if (parametersToCopy != null) {
+            copyParams.putAll(parametersToCopy);
+        }
+        return copyParams;
+    }
+
+    protected void addParentBandDataToParametersRecursively(BandData parentBand, Map<String, Object> currentParams) {
+        while (parentBand != null) {
+            addParentBandDataToParameters(parentBand, currentParams);
+            parentBand = parentBand.getParentBand();
+        }
+    }
+
+    protected void addParentBandDataToParameters(BandData parentBand, Map<String, Object> currentParams) {
+        if (parentBand != null) {
+            String parentBandName = parentBand.getName();
+
+            for (Map.Entry<String, Object> entry : parentBand.getData().entrySet()) {
+                currentParams.put(parentBandName + "." + entry.getKey(), entry.getValue());
+            }
+        }
     }
 }

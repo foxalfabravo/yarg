@@ -24,16 +24,18 @@ import com.haulmont.yarg.formatters.factory.FormatterFactoryInput;
 import com.haulmont.yarg.formatters.impl.xls.Area;
 import com.haulmont.yarg.formatters.impl.xls.AreaDependencyManager;
 import com.haulmont.yarg.formatters.impl.xls.Cell;
-import com.haulmont.yarg.formatters.impl.xls.PdfConverter;
+import com.haulmont.yarg.formatters.impl.xls.DocumentConverter;
 import com.haulmont.yarg.formatters.impl.xls.caches.XlsFontCache;
 import com.haulmont.yarg.formatters.impl.xls.caches.XlsStyleCache;
+import com.haulmont.yarg.formatters.impl.xls.caches.XslStyleHelper;
 import com.haulmont.yarg.formatters.impl.xls.hints.*;
 import com.haulmont.yarg.formatters.impl.xlsx.Range;
 import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.BandOrientation;
 import com.haulmont.yarg.structure.ReportOutputType;
-import org.apache.commons.collections.CollectionUtils;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.poi.hssf.model.HSSFFormulaParser;
 import org.apache.poi.hssf.record.EscherAggregate;
 import org.apache.poi.hssf.usermodel.*;
@@ -87,7 +89,7 @@ public class XLSFormatter extends AbstractFormatter {
     protected Map<HSSFSheet, HSSFPatriarch> drawingPatriarchsMap = new HashMap<HSSFSheet, HSSFPatriarch>();
     protected List<XlsHint> hints = new ArrayList<XlsHint>();
 
-    protected PdfConverter pdfConverter;
+    protected DocumentConverter documentConverter;
 
     protected BiMap<BandData, Range> bandsToResultRanges = HashBiMap.create();
 
@@ -102,8 +104,8 @@ public class XLSFormatter extends AbstractFormatter {
         hints.add(new CustomWidthHint());
     }
 
-    public void setPdfConverter(PdfConverter pdfConverter) {
-        this.pdfConverter = pdfConverter;
+    public void setDocumentConverter(DocumentConverter documentConverter) {
+        this.documentConverter = documentConverter;
     }
 
     @Override
@@ -173,15 +175,19 @@ public class XLSFormatter extends AbstractFormatter {
                 resultWorkbook.write(outputStream);
             } catch (Exception e) {
                 throw wrapWithReportingException("An error occurred while writing result to file.", e);
+            } finally {
+                IOUtils.closeQuietly(outputStream);
             }
         } else if (ReportOutputType.pdf.equals(outputType)) {
-            if (pdfConverter != null) {
+            if (documentConverter != null) {
                 try {
                     ByteArrayOutputStream stream = new ByteArrayOutputStream();
                     resultWorkbook.write(stream);
-                    pdfConverter.convertToPdf(PdfConverter.FileType.SPREADSHEET, stream.toByteArray(), outputStream);
+                    documentConverter.convertToPdf(DocumentConverter.FileType.SPREADSHEET, stream.toByteArray(), outputStream);
                 } catch (IOException e) {
                     throw wrapWithReportingException("An error occurred while converting xls to pdf.", e);
+                } finally {
+                    IOUtils.closeQuietly(outputStream);
                 }
             } else {
                 throw new UnsupportedFormatException("Could not convert xls files to pdf because Open Office connection params not set. Please check, that \"cuba.reporting.openoffice.path\" property is set in properties file.");
@@ -452,11 +458,9 @@ public class XLSFormatter extends AbstractFormatter {
     }
 
     /**
-     * <p>
-     * Method creates mapping [rangeName -> List< CellRangeAddress >]. <br/>
-     * List contains all merge regions for this named range
-     * </p>
-     * Attention: if merged regions writes wrong - look on methods isMergeRegionInsideNamedRange & isNamedRangeInsideMergeRegion
+     * Method creates mapping [rangeName : List&lt;CellRangeAddress&gt;].
+     * List contains all merge regions for this named range.
+     * Attention: if merged regions writes wrong - look on methods isMergeRegionInsideNamedRange or isNamedRangeInsideMergeRegion
      * todo: how to recognize if merge region must be copied with named range
      *
      * @param currentSheet Sheet which contains merge regions
@@ -753,13 +757,13 @@ public class XLSFormatter extends AbstractFormatter {
         if (style == null) {
             HSSFCellStyle newStyle = resultWorkbook.createCellStyle();
 
-            newStyle.cloneStyleRelationsFrom(templateStyle);
+            XslStyleHelper.cloneStyleRelations(templateStyle, newStyle);
             HSSFFont templateFont = templateStyle.getFont(templateWorkbook);
             HSSFFont font = fontCache.getFontByTemplate(templateFont);
             if (font != null)
                 newStyle.setFont(font);
             else {
-                newStyle.cloneFontFrom(templateStyle);
+                XslStyleHelper.cloneFont(templateStyle, newStyle);
                 fontCache.addCachedFont(templateFont, newStyle.getFont(resultWorkbook));
             }
             styleCache.addCachedStyle(templateStyle, newStyle);

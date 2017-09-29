@@ -13,26 +13,21 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.formatters.impl.xlsx;
 
+import org.apache.commons.lang3.ObjectUtils;
 import org.xlsx4j.sml.Cell;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class CellReference {
+public class CellReference implements Comparable {
     public static final Pattern CELL_COORDINATES_PATTERN = Pattern.compile("([A-z]+)([0-9]+)");
     private int column;
     private int row;
     private String sheet;
 
-    public CellReference(String sheet, int column, int row) {
+    public CellReference(String sheet, int row, int column) {
         this.column = column;
         this.row = row;
         this.sheet = sheet;
@@ -45,7 +40,7 @@ public class CellReference {
             row = Integer.valueOf(matcher.group(2));
             this.sheet = sheet;
         } else {
-            throw new RuntimeException("Wrong cell " + cellRef);
+            throw new RuntimeException(String.format("Wrong cell %s", cellRef));
         }
     }
 
@@ -79,5 +74,39 @@ public class CellReference {
 
     public String getSheet() {
         return sheet;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        CellReference that = (CellReference) o;
+
+        if (column != that.column) return false;
+        if (row != that.row) return false;
+        if (sheet != null ? !sheet.equals(that.sheet) : that.sheet != null) return false;
+
+        return true;
+    }
+
+    @Override
+    public int hashCode() {
+        int result = column;
+        result = 31 * result + row;
+        result = 31 * result + (sheet != null ? sheet.hashCode() : 0);
+        return result;
+    }
+
+    @Override
+    public int compareTo(Object o) {
+        if (o instanceof CellReference) {
+            int rows = ObjectUtils.compare(row, ((CellReference) o).row);
+            int columns = ObjectUtils.compare(column, ((CellReference) o).column);
+            return rows != 0 ? rows : columns;
+
+        } else {
+            throw new IllegalArgumentException("Could not compare with " + o);
+        }
     }
 }

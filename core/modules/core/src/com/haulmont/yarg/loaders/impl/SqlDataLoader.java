@@ -21,7 +21,7 @@ import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.ReportQuery;
 import com.haulmont.yarg.util.db.QueryRunner;
 import com.haulmont.yarg.util.db.ResultSetHandler;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 
 import javax.sql.DataSource;
 import java.sql.ResultSet;
@@ -39,7 +39,7 @@ import java.util.regex.Pattern;
  * You can use aliases for output values
  *
  * Example:
- * select login as "Login", password as "Password" from user where create_ts > ${startDate}
+ * select login as "Login", password as "Password" from user where create_ts &gt; ${startDate}
  *
  * ${startDate} is alias of the input parameter, which will be passed to the query
  */
@@ -60,8 +60,10 @@ public class SqlDataLoader extends AbstractDbDataLoader {
             return Collections.emptyList();
         }
 
-        QueryRunner runner = new QueryRunner(dataSource);
         try {
+            if (Boolean.TRUE.equals(reportQuery.getProcessTemplate())) {
+                query = processQueryTemplate(query, parentBand, params);
+            }
             final QueryPack pack = prepareQuery(query, parentBand, params);
 
             ArrayList<Object> resultingParams = new ArrayList<Object>();
@@ -74,7 +76,7 @@ public class SqlDataLoader extends AbstractDbDataLoader {
                 }
             }
 
-            resList = runner.query(pack.getQuery(), resultingParams.toArray(), new ResultSetHandler<List>() {
+            resList = runQuery(reportQuery, pack.getQuery(), resultingParams.toArray(), new ResultSetHandler<List>() {
                 @Override
                 public List handle(ResultSet rs) throws SQLException {
                     List<Object[]> resList = new ArrayList<Object[]>();
@@ -107,10 +109,21 @@ public class SqlDataLoader extends AbstractDbDataLoader {
                     }
                 }
             });
+        } catch (DataLoadingException e) {
+            throw e;
         } catch (Throwable e) {
             throw new DataLoadingException(String.format("An error occurred while loading data for data set [%s]", reportQuery.getName()), e);
         }
 
         return fillOutputData(resList, outputValues);
+    }
+
+    protected List runQuery(ReportQuery reportQuery, String queryString, Object[] params, ResultSetHandler<List> handler) throws SQLException {
+        QueryRunner runner = new QueryRunner(getDataSource());
+        return runner.query(queryString, params, handler);
+    }
+
+    public DataSource getDataSource() {
+        return dataSource;
     }
 }

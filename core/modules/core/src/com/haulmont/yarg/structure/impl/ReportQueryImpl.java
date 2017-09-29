@@ -13,12 +13,6 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.structure.impl;
 
 import com.google.common.base.Preconditions;
@@ -36,14 +30,21 @@ public class ReportQueryImpl implements ReportQuery {
 
     protected String loaderType;
 
+    protected Boolean processTemplate;
+
     protected Map<String, Object> additionalParams = Collections.emptyMap();
 
     public ReportQueryImpl(String name, String script, String loaderType, String linkParameterName, Map<String, Object> additionalParams) {
+        this(name, script, loaderType, linkParameterName, additionalParams, false);
+    }
+
+    public ReportQueryImpl(String name, String script, String loaderType, String linkParameterName, Map<String, Object> additionalParams, boolean processTemplate) {
         this.name = name;
         this.script = script;
         this.loaderType = loaderType;
         this.additionalParams = additionalParams;
         this.linkParameterName = linkParameterName;
+        this.processTemplate = processTemplate;
         validate();
     }
 
@@ -57,18 +58,27 @@ public class ReportQueryImpl implements ReportQuery {
         Preconditions.checkNotNull(this.loaderType, "\"loaderType\" parameter can not be null");
     }
 
+    @Override
     public String getScript() {
         return script;
     }
 
+    @Override
     public String getLoaderType() {
         return loaderType;
     }
 
+    @Override
     public String getName() {
         return name;
     }
 
+    @Override
+    public Boolean getProcessTemplate() {
+        return processTemplate;
+    }
+
+    @Override
     public String getLinkParameterName() {
         return linkParameterName;
     }

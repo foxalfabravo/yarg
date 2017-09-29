@@ -13,12 +13,6 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.formatters.impl.xlsx;
 
 import com.haulmont.yarg.exception.ReportFormattingException;
@@ -46,8 +40,8 @@ public class Document {
     protected Map<Range, ChartWrapper> chartSpaces = new HashMap<Range, ChartWrapper>();
     protected Workbook workbook;
     protected SharedStrings sharedStrings;
+    protected StyleSheet styleSheet;
     protected HashSet<Part> handled = new HashSet<Part>();
-
 
     public static Document create(SpreadsheetMLPackage thePackage) {
         Document document = new Document();
@@ -134,11 +128,11 @@ public class Document {
         return targetRange;
     }
 
-    public List<Cell> getCellsByRange(Range range) {
+    public Map<CellReference, Cell> getCellsByRange(Range range) {
         Worksheet sheet = getSheetByName(range.getSheet());
         SheetData data = sheet.getSheetData();
 
-        List<Cell> result = new ArrayList<Cell>();
+        Map<CellReference, Cell> result = new LinkedHashMap<CellReference, Cell>();
         for (int i = 1; i <= data.getRow().size(); i++) {
             Row row = data.getRow().get(i - 1);
             if (range.getFirstRow() <= row.getR() && row.getR() <= range.getLastRow()) {
@@ -147,7 +141,7 @@ public class Document {
                 for (Cell cell : c) {
                     CellReference cellReference = new CellReference(range.getSheet(), cell.getR());
                     if (range.getFirstColumn() <= cellReference.getColumn() && cellReference.getColumn() <= range.getLastColumn()) {
-                        result.add(cell);
+                        result.put(cellReference, cell);
                     }
                 }
             }
@@ -167,6 +161,10 @@ public class Document {
         }
 
         return null;
+    }
+
+    public StyleSheet getStyleSheet() {
+        return styleSheet;
     }
 
     private void traverse(Part parent, RelationshipsPart rp) {
@@ -196,6 +194,11 @@ public class Document {
                     }
 
                     chartSpaces.put(range, new ChartWrapper((CTChartSpace) o, drawing, ctTwoCellAnchor));
+                }
+
+                if (o instanceof CTStylesheet) {
+                    styleSheet = new StyleSheet((CTStylesheet)o);
+
                 }
 
                 if (o instanceof Workbook) {

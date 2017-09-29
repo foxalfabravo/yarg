@@ -1,10 +1,10 @@
 package loaders;
 
+import com.haulmont.yarg.loaders.impl.GroovyDataLoader;
 import com.haulmont.yarg.loaders.impl.JsonDataLoader;
+import com.haulmont.yarg.loaders.impl.SqlDataLoader;
 import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.BandOrientation;
-import com.haulmont.yarg.loaders.impl.GroovyDataLoader;
-import com.haulmont.yarg.loaders.impl.SqlDataLoader;
 import com.haulmont.yarg.structure.impl.ReportQueryImpl;
 import com.haulmont.yarg.util.groovy.DefaultScriptingImpl;
 import junit.framework.Assert;
@@ -16,9 +16,7 @@ import java.util.*;
 
 /**
  * @author degtyarjov
- * @version $Id$
  */
-
 public class DataLoadersTest {
 
     @Test
@@ -43,9 +41,9 @@ public class DataLoadersTest {
         } catch (Exception e) {
             e.printStackTrace();
             Assert.fail();
+        } finally {
+            testDatabase.stop();
         }
-
-        testDatabase.stop();
     }
 
     @Test
@@ -70,9 +68,9 @@ public class DataLoadersTest {
         } catch (Exception e) {
             e.printStackTrace();
             Assert.fail();
+        } finally {
+            testDatabase.stop();
         }
-
-        testDatabase.stop();
     }
 
     private void printResult(List<Map<String, Object>> result) {
@@ -96,7 +94,7 @@ public class DataLoadersTest {
         printResult(result);
     }
 
-    @Test
+//    @Test todo
     public void testLinksInQueries() throws Exception {
 
     }
@@ -105,7 +103,9 @@ public class DataLoadersTest {
     public void testJson() throws Exception {
         JsonDataLoader jsonDataLoader = new JsonDataLoader();
         BandData rootBand = new BandData("band1", null, BandOrientation.HORIZONTAL);
-        rootBand.setData(Collections.<String, Object>emptyMap());
+        rootBand.setData(new HashMap<String, Object>());
+        rootBand.getData().put("searchParameter", "fiction");
+
         ReportQueryImpl reportQuery = new ReportQueryImpl("", "parameter=param1 $.store.book[*]", "json", null, null);
 
         String json = "{ \"store\": {\n" +
@@ -147,9 +147,19 @@ public class DataLoadersTest {
 
         Assert.assertEquals("red", map.get("store.bicycle.color"));
 
-        reportQuery = new ReportQueryImpl("", "parameter=param1 $some.not.existing", "json", null, null);
+        params.put("searchParameter", "reference");
+        reportQuery = new ReportQueryImpl("", "parameter=param1 $.store.book[?(@.category=='${searchParameter}')]", "json", null, null);
+        maps = jsonDataLoader.loadData(reportQuery, rootBand, params);
+        map = maps.get(0);
+        Assert.assertEquals("reference", map.get("category"));
+
+        reportQuery = new ReportQueryImpl("", "parameter=param1 $.store.book[?(@.category=='${band1.searchParameter}')]", "json", null, null);
+        maps = jsonDataLoader.loadData(reportQuery, rootBand, params);
+        map = maps.get(0);
+        Assert.assertEquals("fiction", map.get("category"));
+
+        reportQuery = new ReportQueryImpl("", "parameter=param1 $.some.not.existing", "json", null, null);
         maps = jsonDataLoader.loadData(reportQuery, rootBand, params);
         Assert.assertEquals(0, maps.size());
-
     }
 }

@@ -20,23 +20,38 @@ import com.haulmont.yarg.formatters.factory.FormatterFactoryInput;
 import com.haulmont.yarg.formatters.impl.docx.DocumentWrapper;
 import com.haulmont.yarg.formatters.impl.docx.TableManager;
 import com.haulmont.yarg.formatters.impl.docx.TextWrapper;
+import com.haulmont.yarg.formatters.impl.docx.UrlVisitor;
 import com.haulmont.yarg.formatters.impl.inline.ContentInliner;
-import com.haulmont.yarg.formatters.impl.xls.PdfConverter;
+import com.haulmont.yarg.formatters.impl.xls.DocumentConverter;
 import com.haulmont.yarg.structure.BandData;
 import com.haulmont.yarg.structure.ReportFieldFormat;
 import com.haulmont.yarg.structure.ReportOutputType;
 import org.apache.commons.io.IOUtils;
 import org.docx4j.Docx4J;
+import org.docx4j.TraversalUtil;
+import org.docx4j.convert.in.xhtml.XHTMLImporter;
+import org.docx4j.convert.in.xhtml.XHTMLImporterImpl;
 import org.docx4j.convert.out.HTMLSettings;
 import org.docx4j.openpackaging.exceptions.Docx4JException;
 import org.docx4j.openpackaging.io.SaveToZipFile;
 import org.docx4j.openpackaging.packages.WordprocessingMLPackage;
-import org.docx4j.wml.Text;
-import org.docx4j.wml.Tr;
+import org.docx4j.openpackaging.parts.JaxbXmlPartAltChunkHost;
+import org.docx4j.openpackaging.parts.WordprocessingML.AltChunkType;
+import org.docx4j.openpackaging.parts.WordprocessingML.AlternativeFormatInputPart;
+import org.docx4j.openpackaging.parts.WordprocessingML.MainDocumentPart;
+import org.docx4j.toc.TocException;
+import org.docx4j.toc.TocFinder;
+import org.docx4j.toc.TocGenerator;
+import org.docx4j.utils.AltChunkFinder;
+import org.docx4j.wml.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -45,9 +60,11 @@ import java.util.regex.Matcher;
  * * Document formatter for '.docx' file types
  */
 public class DocxFormatter extends AbstractFormatter {
+    protected static final Logger log = LoggerFactory.getLogger(DocxFormatter.class);
+
     protected WordprocessingMLPackage wordprocessingMLPackage;
     protected DocumentWrapper documentWrapper;
-    protected PdfConverter pdfConverter;
+    protected DocumentConverter documentConverter;
 
     public DocxFormatter(FormatterFactoryInput formatterFactoryInput) {
         super(formatterFactoryInput);
@@ -55,8 +72,8 @@ public class DocxFormatter extends AbstractFormatter {
         supportedOutputTypes.add(ReportOutputType.pdf);
     }
 
-    public void setPdfConverter(PdfConverter pdfConverter) {
-        this.pdfConverter = pdfConverter;
+    public void setDocumentConverter(DocumentConverter documentConverter) {
+        this.documentConverter = documentConverter;
     }
 
     @Override
@@ -67,7 +84,35 @@ public class DocxFormatter extends AbstractFormatter {
 
         replaceAllAliasesInDocument();
 
+        handleUrls();
+
+        updateTableOfContents();
+
         saveAndClose();
+    }
+
+    protected void updateTableOfContents() {
+        try {
+            MainDocumentPart documentPart = wordprocessingMLPackage.getMainDocumentPart();
+            Document wmlDocumentEl = documentPart.getJaxbElement();
+            Body body =  wmlDocumentEl.getBody();
+
+            TocFinder finder = new TocFinder();
+            new TraversalUtil(body.getContent(), finder);
+            SdtBlock structuredDocumentPart = finder.getTocSDT();
+
+            if (structuredDocumentPart != null) {
+                TocGenerator tocGenerator = new TocGenerator(wordprocessingMLPackage);
+                tocGenerator.updateToc(false);
+            }
+        } catch (TocException e) {
+            log.error("An error occurred during updating the Table Of Contents", e);
+        }
+    }
+
+    protected void handleUrls() {
+        UrlVisitor urlVisitor = new UrlVisitor(new DocxFormatterDelegate(this), wordprocessingMLPackage.getMainDocumentPart());
+        new TraversalUtil(wordprocessingMLPackage.getMainDocumentPart(), urlVisitor);
     }
 
     protected void loadDocument() {
@@ -84,23 +129,33 @@ public class DocxFormatter extends AbstractFormatter {
     protected void saveAndClose() {
         try {
             if (ReportOutputType.docx.equals(reportTemplate.getOutputType())) {
+                convertAltChunks();
                 writeToOutputStream(wordprocessingMLPackage, outputStream);
                 outputStream.flush();
             } else if (ReportOutputType.pdf.equals(reportTemplate.getOutputType())) {
-                if (pdfConverter != null) {
+                convertAltChunks();
+                if (documentConverter != null) {
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
                     writeToOutputStream(wordprocessingMLPackage, bos);
-                    pdfConverter.convertToPdf(PdfConverter.FileType.DOCUMENT, bos.toByteArray(), outputStream);
+                    documentConverter.convertToPdf(DocumentConverter.FileType.DOCUMENT, bos.toByteArray(), outputStream);
                     outputStream.flush();
                 } else {
                     Docx4J.toPDF(wordprocessingMLPackage, outputStream);
                     outputStream.flush();
                 }
             } else if (ReportOutputType.html.equals(reportTemplate.getOutputType())) {
-                HTMLSettings htmlSettings = Docx4J.createHTMLSettings();
-                htmlSettings.setWmlPackage(wordprocessingMLPackage);
-                Docx4J.toHTML(htmlSettings, outputStream, Docx4J.FLAG_NONE);
-                outputStream.flush();
+                if (documentConverter != null) {
+                    convertAltChunks();
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    writeToOutputStream(wordprocessingMLPackage, bos);
+                    documentConverter.convertToHtml(DocumentConverter.FileType.DOCUMENT, bos.toByteArray(), outputStream);
+                    outputStream.flush();
+                } else {
+                    HTMLSettings htmlSettings = Docx4J.createHTMLSettings();
+                    htmlSettings.setWmlPackage(wordprocessingMLPackage);
+                    Docx4J.toHTML(htmlSettings, outputStream, Docx4J.FLAG_NONE);
+                    outputStream.flush();
+                }
             } else {
                 throw new UnsupportedOperationException(String.format("DocxFormatter could not output file with type [%s]", reportTemplate.getOutputType()));
             }
@@ -124,11 +179,22 @@ public class DocxFormatter extends AbstractFormatter {
             Tr rowWithAliases = resultingTable.getRowWithAliases();
             if (rowWithAliases != null) {
                 List<BandData> bands = rootBand.findBandsRecursively(resultingTable.getBandName());
-                for (final BandData band : bands) {
-                    Tr newRow = resultingTable.copyRow(rowWithAliases);
-                    resultingTable.fillRowFromBand(newRow, band);
+
+                if (bands.size() > 1) {
+                    for (final BandData band : bands) {
+                        Tr newRow = resultingTable.copyRow(rowWithAliases);
+                        resultingTable.fillRowFromBand(newRow, band);
+                    }
+                    resultingTable.getTable().getContent().remove(rowWithAliases);
+                } else if (bands.size() == 1) {
+                    resultingTable.fillRowFromBand(rowWithAliases, bands.get(0));
+                } else if (bands.size() == 0) {
+                    if (resultingTable.noHeader()) {
+                        resultingTable.getTable().getContent().clear();
+                    } else {
+                        resultingTable.getTable().getContent().remove(rowWithAliases);
+                    }
                 }
-                resultingTable.getTable().getContent().remove(rowWithAliases);
             }
         }
     }
@@ -152,5 +218,49 @@ public class DocxFormatter extends AbstractFormatter {
     protected void writeToOutputStream(WordprocessingMLPackage mlPackage, OutputStream outputStream) throws Docx4JException {
         SaveToZipFile saver = new SaveToZipFile(mlPackage);
         saver.save(outputStream);
+    }
+
+    public void convertAltChunks() throws Docx4JException {
+        JaxbXmlPartAltChunkHost mainDocumentPart = wordprocessingMLPackage.getMainDocumentPart();
+        List<Object> contentList = ((ContentAccessor) mainDocumentPart).getContent();
+
+        AltChunkFinder bf = new AltChunkFinder();
+        new TraversalUtil(contentList, bf);
+
+        for (AltChunkFinder.LocatedChunk locatedChunk : bf.getAltChunks()) {
+            CTAltChunk altChunk = locatedChunk.getAltChunk();
+            AlternativeFormatInputPart afip
+                    = (AlternativeFormatInputPart) mainDocumentPart.getRelationshipsPart().getPart(
+                    altChunk.getId());
+            if (afip.getAltChunkType().equals(AltChunkType.Xhtml)) {
+                try {
+                    XHTMLImporter xHTMLImporter = new XHTMLImporterImpl(wordprocessingMLPackage);
+                    List results = xHTMLImporter.convert(toString(afip.getBuffer()), null);
+
+                    int index = locatedChunk.getIndex();
+                    locatedChunk.getContentList().remove(index);
+
+                    Object chunkParent = locatedChunk.getAltChunk().getParent();
+                    R parentRun = (R) chunkParent;//always should be R
+                    P parentParagraph = (P) parentRun.getParent();
+
+                    for (Object result : results) {
+                        if (result instanceof P) {
+                            P resultParagraph = (P) result;
+                            parentParagraph.getContent().addAll(resultParagraph.getContent());
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("An error occurred while converting HTML parts of DOCX document for PDF render");
+                    log.error(e.getMessage(), e);
+                }
+            }
+        }
+    }
+
+    private String toString(ByteBuffer bb) throws UnsupportedEncodingException {
+        byte[] bytes = new byte[bb.limit()];
+        bb.get(bytes);
+        return new String(bytes, "UTF-8");
     }
 }

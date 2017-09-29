@@ -13,15 +13,13 @@
  * License for the specific language governing permissions and limitations under
  * the License.
  */
-
-/**
- *
- * @author degtyarjov
- * @version $Id$
- */
 package com.haulmont.yarg.formatters.impl.xlsx;
 
 public final class XlsxUtils {
+
+    private static final long PX_PER_INCH = 96;
+    private static final long EMU_PER_INCH = 914400;
+
     private XlsxUtils() {
     }
 
@@ -50,5 +48,9 @@ public final class XlsxUtils {
         } while (number > 0);
 
         return ref.reverse().toString();
+    }
+
+    public static long convertPxToEmu(long px) {
+        return px * EMU_PER_INCH / PX_PER_INCH;
     }
 }

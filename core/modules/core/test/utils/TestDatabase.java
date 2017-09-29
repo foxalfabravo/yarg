@@ -1,6 +1,6 @@
 package utils;
 
-import com.haulmont.yarg.loaders.factory.DefaultLoaderFactory;
+import com.haulmont.yarg.util.DatasourceCreator;
 import org.hsqldb.Server;
 
 import javax.sql.DataSource;
@@ -21,7 +21,7 @@ public class TestDatabase {
         hsqlServer.setDatabasePath(0, "file:./db/testdb");
 
         hsqlServer.start();
-        ds = DefaultLoaderFactory.setupDataSource("org.hsqldb.jdbcDriver", "jdbc:hsqldb:hsql://localhost/reportingDb", "sa", "", 10, 10, 0);
+        ds = DatasourceCreator.setupDataSource("org.hsqldb.jdbcDriver", "jdbc:hsqldb:hsql://localhost/reportingDb", "sa", "", 10, 10, 0);
 
         Connection connection = ds.getConnection();
         try {
@@ -29,10 +29,10 @@ public class TestDatabase {
         } catch (SQLException e) {
             //ignore
         }
-        connection.createStatement().executeUpdate("create table user (login varchar, password varchar, create_ts timestamp);");
-        connection.createStatement().executeUpdate("insert into user (login, password, create_ts) values ('login1', 'passwd', '2050-01-01');");
-        connection.createStatement().executeUpdate("insert into user (login, password, create_ts) values ('login2', 'passwd', '2050-01-01');");
-        connection.createStatement().executeUpdate("insert into user (login, password, create_ts) values ('login3', 'passwd', '2050-01-01');");
+        connection.createStatement().executeUpdate("create table user (login varchar(50), password varchar(50), create_ts timestamp);");
+        connection.createStatement().executeUpdate("insert into user (login, password, create_ts) values ('login1', 'passwd', TIMESTAMP '2050-01-01 00:00:00');");
+        connection.createStatement().executeUpdate("insert into user (login, password, create_ts) values ('login2', 'passwd', TIMESTAMP '2050-01-01 00:00:00');");
+        connection.createStatement().executeUpdate("insert into user (login, password, create_ts) values ('login3', 'passwd', TIMESTAMP '2050-01-01 00:00:00');");
         connection.commit();
     }
 
@@ -42,7 +42,7 @@ public class TestDatabase {
 
     public void stop() {
         try {
-            hsqlServer.stop();
+            hsqlServer.shutdown();
         } catch (Exception e) {
             //ignore
         }
